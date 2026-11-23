@@ -1,0 +1,9 @@
+streamlit>=1.40
+pandas>=2.2
+dwca-writer>=1.0.0
+python-dwca-reader>=0.12
+typer>=0.15
+pydantic>=2.8
+pyyaml>=6.0
+pygbif>=0.6.0
+requests>=2.32
