@@ -5,9 +5,10 @@ import pandas as pd
 from requests.exceptions import RequestException
 from pathlib import Path
 
-# Importations correctes pour dwcahandler
+# Importations correctes selon la documentation officielle de dwcahandler
 from dwcahandler import DwcaHandler, ContentData, MetaElementTypes
 from dwcahandler import Dataset, Eml, Description, Contact, Name
+
 
 def gbif_api_call(method, url, max_retries=5, **kwargs):
     for attempt in range(max_retries):
@@ -25,37 +26,22 @@ def gbif_api_call(method, url, max_retries=5, **kwargs):
 
 
 def generate_dwca(df: pd.DataFrame, output_dir) -> Path:
-    """Génère une archive DwC-A en utilisant dwcahandler."""
+    """Génère une archive DwC-A en utilisant la bibliothèque dwcahandler."""
     output_path = Path(output_dir) / "dna_dataset.zip"
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # 1. Définir les colonnes
+    # 1. Préparation des données (DataFrames)
     core_cols = ["occurrenceID", "scientificName", "decimalLatitude", "decimalLongitude", "eventDate"]
-    ext_cols = ["occurrenceID", "target_gene", "seq_meth", "pcr_primer_forward", "pcr_primer_reverse",
-                "dna_sequence", "taxon_id", "samp_name", "project_name",
-                "env_broad_scale", "env_local_scale", "env_medium"]
-
     core_df = df[[c for c in core_cols if c in df.columns]].copy()
-    ext_df = df[[c for c in ext_cols if c in df.columns]].copy()
 
-    # 2. Préparer les objets ContentData
-    core_data = ContentData(
+    # 2. Création de l'objet ContentData pour le core (Occurrence)
+    core_csv = ContentData(
         data=core_df,
         type=MetaElementTypes.OCCURRENCE,
         keys=["occurrenceID"]
     )
-    
-    # L'extension ADN n'est pas explicitement listée dans les MetaElementTypes standard,
-    # on utilise donc une approche générique si nécessaire, ou on l'ajoute si supporté.
-    # Pour l'instant, on ne crée l'extension que si elle a des données.
-    ext_data_list = []
-    if not ext_df.empty and len(ext_df.columns) > 1:
-        # Note: dwcahandler peut nécessiter un type spécifique pour l'extension ADN.
-        # Si MetaElementTypes n'a pas de type ADN, on peut essayer de l'ajouter manuellement.
-        # Pour cet exemple, on va se concentrer sur le core, ou utiliser une astuce.
-        pass 
 
-    # 3. Préparer les métadonnées EML
+    # 3. Création de l'objet Eml (métadonnées obligatoires)
     eml = Eml(
         dataset=Dataset(
             dataset_name="Données ADN dérivées - Pipeline SPLICE",
@@ -67,11 +53,10 @@ def generate_dwca(df: pd.DataFrame, output_dir) -> Path:
         )
     )
 
-    # 4. Générer l'archive
-    # On passe le DataFrame directement (dwcahandler accepte les DataFrames)
+    # 4. Génération de l'archive avec la méthode officielle
     DwcaHandler.create_dwca(
-        core_csv=core_data,
-        ext_csv_list=None, # On omet l'extension pour l'instant pour éviter les erreurs de type
+        core_csv=core_csv,
+        ext_csv_list=None,  # On omet l'extension ADN pour l'instant (le core fonctionnera)
         eml_content=eml,
         output_dwca=str(output_path)
     )
