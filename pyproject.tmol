@@ -1,0 +1,33 @@
+[project]
+name = "dna-pipeline-gbif"
+version = "0.1.0"
+description = "Pipeline de publication de données ADN dérivées vers GBIF (SPLICE)"
+requires-python = ">=3.10"
+dependencies = [
+    "streamlit>=1.40",
+    "pandas>=2.2",
+    "dwca-writer>=1.0.0",
+    "python-dwca-reader>=0.12",
+    "typer>=0.15",
+    "pydantic>=2.8",
+    "pyyaml>=6.0",
+    "pygbif>=0.6.0",
+    "requests>=2.32",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8.0", "pytest-cov>=5.0"]
+
+[project.scripts]
+dna-pipeline = "dna_pipeline.cli:app"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+markers = ["integration: tests d'intégration"]
+testpaths = ["tests"]
