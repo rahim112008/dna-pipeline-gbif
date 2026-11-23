@@ -1,12 +1,3 @@
-
----
-
-## 📋 Fichier 16/28 — `app/app_pages/dashboard.py`
-
-**Nom à taper :** `app/app_pages/dashboard.py`
-
-**Contenu :**
-```python
 import streamlit as st
 import sys
 from pathlib import Path
