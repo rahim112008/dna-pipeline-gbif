@@ -16,3 +16,6 @@ mdurl>=0.1.2
 
 # Dépendance manquante pour dwca-writer
 xmltodict
+
+# Correctif pour pkg_resources (supprimé dans setuptools>=82)
+setuptools<82
