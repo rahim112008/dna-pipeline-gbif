@@ -1,6 +1,6 @@
 streamlit>=1.40
 pandas>=2.2
-dwca-writer>=1.0.0
+dwca-writer==0.2.0
 python-dwca-reader>=0.12
 typer>=0.15
 pydantic>=2.8
