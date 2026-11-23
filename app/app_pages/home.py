@@ -1,7 +1,6 @@
 import streamlit as st
 
 st.title("🧬 Pipeline de publication de données ADN dérivées vers GBIF")
-
 st.markdown("""
 **Interface de démonstration** du pipeline de publication de données ADN
 vers le réseau GBIF.
@@ -14,5 +13,5 @@ vers le réseau GBIF.
 - Publication via l'API GBIF
 
 ### CLI
-```bash
-dna-pipeline run --input-path data/raw/example.csv
+Utilisez la commande `dna-pipeline run --input-path data/raw/example.csv`
+""")
