@@ -1,0 +1,3 @@
+occurrence_id,scientific_name,latitude,longitude,event_date,target_gene,sequencing_method,primer_f,primer_r,dna_sequence,taxon_id,sample_name,project
+OCC001,Gadus morhua,60.1,5.2,2024-05-01,COI,Illumina MiSeq,GGWACWGGWTGAACWGTWTAYCCYCC,TANACYTCNGGRTGNCCRAARAAYCA,ACGTACGTACGT,8049,S001,SEA-eDNA
+OCC002,Clupea harengus,59.8,4.9,2024-05-02,12S,Illumina MiSeq,GTCGGTAAAACTCGTGCCAGC,CATAGTGGGGTATCTAATCCCAGTTTG,TTTTCCCCAAAA,7950,S002,SEA-eDNA
