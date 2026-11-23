@@ -1,6 +1,6 @@
 streamlit>=1.40
 pandas>=2.2
-dwca-writer==0.2.0
+dwcahandler
 python-dwca-reader>=0.12
 typer>=0.15
 pydantic>=2.8
@@ -8,14 +8,10 @@ pyyaml>=6.0
 pygbif>=0.6.0
 requests>=2.32
 
-# Versions épinglées pour éviter les conflits sur Streamlit Cloud
 rich>=13.9.4,<14
 markdown-it-py>=3.0.0
 pygments>=2.19.1
 mdurl>=0.1.2
 
-# Dépendance manquante pour dwca-writer
 xmltodict
-
-# Correctif pour pkg_resources (supprimé dans setuptools>=82)
 setuptools<82
