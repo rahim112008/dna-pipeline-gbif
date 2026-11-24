@@ -1,22 +1,32 @@
-import streamlit as st
 import sys
-from pathlib import Path
 import tempfile
+from pathlib import Path
+
+import streamlit as st
 
 sys.path.append(str(Path(__file__).resolve().parents[2] / "src"))
 from dna_pipeline.ingest import load_data
 from dna_pipeline.transform import map_to_dwc
 from dna_pipeline.validate import validate_dwc, validate_mixs_terms
-from dna_pipeline.publish import generate_dwca
+from dna_pipeline.publish import generate_dwca, EXT_COLS
+from dna_pipeline.eml import DatasetMeta, LICENSES, validate_meta
+
+# Colonnes de l'extension « DNA derived data » sous leur nom interne (DNA_sequence -> dna_sequence)
+EXT_INTERNAL = {"dna_sequence" if c == "DNA_sequence" else c for c in EXT_COLS}
 
 st.title("✅ Rapport de validation")
 uploaded = st.file_uploader("Fichier à valider", type=["csv", "xlsx"], key="val")
 
 if uploaded:
-    df = map_to_dwc(load_data(uploaded))
+    try:
+        df = map_to_dwc(load_data(uploaded))
+    except Exception as e:
+        st.error(f"Lecture impossible : {e}")
+        st.stop()
     report = validate_dwc(df)
+    st.caption(f"{len(df)} ligne(s) lue(s).")
 
-    # 1. Affichage des erreurs
+    # 1. Erreurs
     if report["errors"]:
         st.error(f"{len(report['errors'])} erreur(s) :")
         for e in report["errors"]:
@@ -24,44 +34,67 @@ if uploaded:
     else:
         st.success("Aucune erreur bloquante.")
 
-    # 2. Affichage des avertissements
+    # 2. Avertissements
     for w in report["warnings"]:
         st.info(f"{w['type']} : {w['message']}")
 
-    # 3. Validation MIxS
+    # 3. Validation MIxS (uniquement les colonnes de l'extension ADN)
     st.subheader("Validation MIxS")
-    mixs = validate_mixs_terms(df)
+    ext_df = df[["occurrenceID"] + [c for c in df.columns if c in EXT_INTERNAL]]
+    mixs = validate_mixs_terms(ext_df)
     if "error" in mixs:
         st.warning(mixs["error"])
     elif mixs["valid"]:
-        st.success(f"{len(mixs['valid_terms'])} termes MIxS valides.")
+        st.success(f"{len(mixs['valid_terms'])} termes valides dans l'extension ADN.")
     else:
-        st.warning(f"Invalides : {mixs['invalid_terms']}")
+        st.warning(f"Termes absents de la spécification : {mixs['invalid_terms']}")
 
-    # 4. GÉNÉRATION ET TÉLÉCHARGEMENT DU FICHIER FINAL (OUTPUT)
-    st.divider() # Ligne de séparation
+    # 4. Métadonnées du jeu de données (EML)
+    st.divider()
+    st.subheader("📝 Métadonnées du jeu de données")
+    st.caption("À rédiger en anglais : elles seront visibles sur GBIF.")
+    title = st.text_input("Titre *")
+    abstract = st.text_area("Résumé * (50 caractères minimum)", height=120)
+    c1, c2 = st.columns(2)
+    first = c1.text_input("Prénom de l'auteur")
+    last = c2.text_input("Nom de l'auteur *")
+    email = c1.text_input("Courriel de l'auteur *")
+    org = c2.text_input("Organisation")
+    orcid = st.text_input("ORCID (facultatif, ex. https://orcid.org/0000-0000-0000-0000)")
+    lic = st.selectbox("Licence", list(LICENSES), index=1)
+    sampling = st.text_area("Description de l'échantillonnage (recommandée)")
+
+    meta = DatasetMeta(
+        title=title, abstract=abstract, license=lic, sampling_description=sampling,
+        publisher_org=org, creators=[{"first_name": first, "last_name": last, "email": email,
+                                      "organization": org, "orcid": orcid}])
+    meta_problems = validate_meta(meta)
+
+    # 5. Génération de l'archive
+    st.divider()
     st.subheader("📦 Génération du fichier final (DwC-A)")
-    
-    if not report["errors"]:
-        st.write("Vos données sont valides. Vous pouvez générer et télécharger l'archive Darwin Core prête pour GBIF.")
-        
-        if st.button("Créer l'archive ZIP", type="primary"):
-            with st.spinner("Création de l'archive en cours..."):
-                with tempfile.TemporaryDirectory() as tmpdir:
-                    # Génération de l'archive avec le module publish.py
-                    archive_path = generate_dwca(df, tmpdir)
-                    
-                    # Lecture du fichier généré
-                    with open(archive_path, "rb") as f:
-                        zip_data = f.read()
-                    
-                    st.success("Archive générée avec succès !")
-                    # Bouton de téléchargement
-                    st.download_button(
-                        label="⬇️ Télécharger le fichier ZIP (Darwin Core Archive)",
-                        data=zip_data,
-                        file_name="dna_dataset.zip",
-                        mime="application/zip"
-                    )
+    file_id = f"{uploaded.name}-{uploaded.size}"
+    if st.session_state.get("zip_for") != file_id:      # nouveau fichier : on oublie l'ancienne archive
+        st.session_state.pop("zip_data", None)
+
+    if report["errors"]:
+        st.info("Corrigez les erreurs ci-dessus pour pouvoir générer l'archive.")
+    elif meta_problems:
+        st.info("Complétez les métadonnées : " + " ; ".join(meta_problems))
     else:
-        st.info("Veuillez corriger les erreurs ci-dessus pour pouvoir générer l'archive.")
+        if st.button("Créer l'archive ZIP", type="primary"):
+            try:
+                with st.spinner("Création de l'archive en cours..."):
+                    with tempfile.TemporaryDirectory() as tmpdir:
+                        archive_path = generate_dwca(df, tmpdir, meta)
+                        st.session_state["zip_data"] = Path(archive_path).read_bytes()
+                        st.session_state["zip_for"] = file_id
+            except Exception as e:
+                st.error(f"Création impossible : {e}")
+
+    # Le bouton de téléchargement reste affiché après un clic (état conservé)
+    if st.session_state.get("zip_data") and st.session_state.get("zip_for") == file_id:
+        st.success("Archive générée avec succès !")
+        st.download_button("⬇️ Télécharger le fichier ZIP (Darwin Core Archive)",
+                           data=st.session_state["zip_data"],
+                           file_name="dna_dataset.zip", mime="application/zip")
