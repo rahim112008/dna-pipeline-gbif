@@ -1,77 +1,127 @@
 import os
 import time
+import warnings
 import requests
 import pandas as pd
-from requests.exceptions import RequestException
+from requests.exceptions import ConnectionError as ReqConnError, Timeout
 from pathlib import Path
 
-# Importations correctes selon la documentation officielle de dwcahandler
-from dwcahandler import DwcaHandler, ContentData, MetaElementTypes
-from dwcahandler import Dataset, Eml, Description, Contact, Name
+from .eml import DatasetMeta, LICENSES, build_eml, validate_meta
+
+OCCURRENCE_CORE_SPEC = "https://rs.gbif.org/core/dwc_occurrence_2022-02-02.xml"
+DNA_EXTENSION_SPEC = "http://rs.gbif.org/extension/gbif/1.0/dna_derived_data_2024-07-11.xml"
+GBIF_ENVS = {"uat": "https://api.gbif-uat.org/v1", "prod": "https://api.gbif.org/v1"}
+
+# Termes du cœur Occurrence (uniquement des termes présents dans la spécification dwc_occurrence_2022-02-02)
+CORE_COLS = ["occurrenceID", "basisOfRecord", "occurrenceStatus", "scientificName", "taxonRank", "taxonID",
+             "kingdom", "phylum", "class", "order", "family", "genus", "eventDate", "decimalLatitude",
+             "decimalLongitude", "geodeticDatum", "countryCode", "locality", "organismQuantity",
+             "organismQuantityType", "eventID", "materialSampleID", "identificationReferences",
+             "identificationRemarks", "samplingProtocol", "datasetName", "institutionCode", "license"]
+# Termes de l'extension DNA derived data (noms EXACTS de la spécification)
+EXT_COLS = ["DNA_sequence", "target_gene", "target_subfragment", "seq_meth", "pcr_primer_forward",
+            "pcr_primer_reverse", "pcr_primer_name_forward", "pcr_primer_name_reverse", "pcr_primer_reference",
+            "samp_name", "project_name", "env_broad_scale", "env_local_scale", "env_medium",
+            "lib_layout", "otu_db", "otu_class_appr", "otu_seq_comp_appr", "sop", "mid"]
+
+
+class GBIFError(RuntimeError):
+    pass
 
 
 def gbif_api_call(method, url, max_retries=5, **kwargs):
+    """Réessaie sur 429, 5xx et erreurs réseau ; les autres 4xx échouent immédiatement avec le détail."""
+    last = None
     for attempt in range(max_retries):
         try:
             response = requests.request(method, url, timeout=30, **kwargs)
-            if response.status_code == 429:
-                time.sleep((2 ** attempt) + attempt)
-                continue
-            response.raise_for_status()
-            return response
-        except RequestException as e:
-            if attempt == max_retries - 1:
-                raise RuntimeError(f"Échec API après {max_retries} tentatives : {e}")
+        except (ReqConnError, Timeout) as e:
+            last = f"{type(e).__name__}: {e}"
             time.sleep(2 ** attempt)
+            continue
+        if response.status_code == 429 or response.status_code >= 500:
+            last = f"HTTP {response.status_code}"
+            wait = str(response.headers.get("Retry-After", ""))
+            time.sleep(int(wait) if wait.isdigit() else (2 ** attempt) + attempt)
+            continue
+        if response.status_code >= 400:
+            raise GBIFError(f"HTTP {response.status_code} sur {method} {url} : {str(response.text)[:300]}")
+        return response
+    raise GBIFError(f"Échec API après {max_retries} tentatives ({last}) : {method} {url}")
 
 
-def generate_dwca(df: pd.DataFrame, output_dir) -> Path:
-    """Génère une archive DwC-A en utilisant la bibliothèque dwcahandler."""
+def _prepare_tables(df: pd.DataFrame):
+    d = df.copy()
+    d = d.rename(columns={"dna_sequence": "DNA_sequence"})
+    if "taxon_id" in d.columns:   # identifiant NCBI de l'organisme identifié -> cœur Occurrence, pas l'extension
+        d["taxonID"] = d["taxon_id"].map(
+            lambda v: f"https://www.ncbi.nlm.nih.gov/Taxonomy/Browser/wwwtax.cgi?id={int(float(v))}"
+            if pd.notna(v) and str(v).replace(".0", "").isdigit() else None)
+    for col, default in (("basisOfRecord", "MaterialSample"), ("occurrenceStatus", "present")):
+        if col not in d.columns:
+            d[col] = default
+        d[col] = d[col].fillna(default)             # basisOfRecord est REQUIS par le cœur Occurrence
+    if "decimalLatitude" in d.columns and "geodeticDatum" not in d.columns:
+        d["geodeticDatum"] = "WGS84"
+    if "organismQuantity" in d.columns and "organismQuantityType" not in d.columns:
+        d["organismQuantityType"] = "DNA sequence reads"
+    core_df = d[[c for c in CORE_COLS if c in d.columns]].copy()
+    ext_df = d[["occurrenceID"] + [c for c in EXT_COLS if c in d.columns]].copy()
+    return core_df, ext_df
+
+
+def generate_dwca(df: pd.DataFrame, output_dir, meta: DatasetMeta | None = None) -> Path:
+    from dwcawriter import Archive, Table          # import tardif : l'application démarre sans la dépendance
     output_path = Path(output_dir) / "dna_dataset.zip"
     output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    # 1. Préparation des données (DataFrames)
-    core_cols = ["occurrenceID", "scientificName", "decimalLatitude", "decimalLongitude", "eventDate"]
-    core_df = df[[c for c in core_cols if c in df.columns]].copy()
-
-    # 2. Création de l'objet ContentData pour le core (Occurrence)
-    core_csv = ContentData(
-        data=core_df,
-        type=MetaElementTypes.OCCURRENCE,
-        keys=["occurrenceID"]
-    )
-
-    # 3. Création de l'objet Eml (métadonnées obligatoires)
-    eml = Eml(
-        dataset=Dataset(
-            dataset_name="Données ADN dérivées - Pipeline SPLICE",
-            abstract=Description("Jeu de données de barcoding/métabarcoding généré automatiquement."),
-            creator=Contact(
-                individual_name=Name(first_name="Chercheur", last_name="GBIF"),
-                email="chercheur@exemple.org"
-            )
-        )
-    )
-
-    # 4. Génération de l'archive avec la méthode officielle
-    DwcaHandler.create_dwca(
-        core_csv=core_csv,
-        ext_csv_list=None,  # On omet l'extension ADN pour l'instant (le core fonctionnera)
-        eml_content=eml,
-        output_dwca=str(output_path)
-    )
-    
+    core_df, ext_df = _prepare_tables(df)
+    if meta is None:
+        warnings.warn("Aucune métadonnée de jeu de données fournie : EML minimal, à compléter avant publication.")
+        meta = DatasetMeta(title="DNA-derived dataset (metadata incomplete)",
+                           abstract="Dataset generated by dna-pipeline-gbif; metadata to be completed before publication.",
+                           creators=[{"last_name": "Unknown", "email": "unknown@unknown.invalid"}])
+    else:
+        problems = validate_meta(meta)
+        if problems:
+            raise ValueError("Métadonnées du jeu de données invalides : " + " ; ".join(problems))
+    archive = Archive()
+    archive.eml_text = build_eml(meta, core_df)
+    archive.core = Table(spec=OCCURRENCE_CORE_SPEC, data=core_df, id_index=0, only_mapped_columns=True)
+    if not ext_df.empty and len(ext_df.columns) > 1:
+        archive.extensions.append(Table(spec=DNA_EXTENSION_SPEC, data=ext_df, id_index=0, only_mapped_columns=True))
+    archive.export(str(output_path))
     return output_path
 
 
-def register_dataset_with_gbif(dataset_metadata, endpoint_url, api_base="https://api.gbif.org/v1"):
-    user = os.getenv("GBIF_USER")
-    pwd = os.getenv("GBIF_PWD")
+def _auth():
+    user, pwd = os.getenv("GBIF_USER"), os.getenv("GBIF_PWD")
     if not user or not pwd:
         raise ValueError("Variables GBIF_USER et GBIF_PWD requises.")
-    auth = (user, pwd)
+    return (user, pwd)
+
+
+def _api_base(api_base):
+    return api_base or GBIF_ENVS[os.getenv("GBIF_ENV", "uat")]     # UAT par défaut : jamais la production par accident
+
+
+def build_dataset_payload(meta: DatasetMeta, organization_key: str, installation_key: str) -> dict:
+    return {"publishingOrganizationKey": organization_key, "installationKey": installation_key,
+            "type": "OCCURRENCE", "title": meta.title, "description": meta.abstract,
+            "language": "eng", "license": LICENSES[meta.license][0]}
+
+
+def register_dataset_with_gbif(dataset_metadata, endpoint_url, api_base=None):
+    if not str(endpoint_url).startswith(("http://", "https://")):
+        raise ValueError("L'URL de l'archive doit être publique (http/https).")
+    auth, api_base = _auth(), _api_base(api_base)
     resp = gbif_api_call("POST", f"{api_base}/dataset", json=dataset_metadata, auth=auth)
-    key = resp.json()["key"]
+    body = resp.json()                                   # le registre renvoie la clé (chaîne JSON) ; objet toléré
+    key = body["key"] if isinstance(body, dict) else str(body).strip('"')
     gbif_api_call("POST", f"{api_base}/dataset/{key}/endpoint",
                   json={"type": "DWC_ARCHIVE", "url": endpoint_url}, auth=auth)
     return key
+
+
+def trigger_crawl(dataset_key, api_base=None):
+    """Mise à jour : après avoir remplacé l'archive à la même URL, demande à GBIF de la ré-indexer."""
+    gbif_api_call("POST", f"{_api_base(api_base)}/dataset/{dataset_key}/crawl", auth=_auth())
