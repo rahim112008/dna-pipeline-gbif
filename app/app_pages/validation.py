@@ -11,6 +11,7 @@ from dna_pipeline.validate import validate_dwc, validate_mixs_terms
 from dna_pipeline.publish import generate_dwca, EXT_COLS
 from dna_pipeline.eml import DatasetMeta, LICENSES, validate_meta
 from dna_pipeline.ui_publication import render_publication
+from dna_pipeline.delivery import build_delivery_package
 
 # Colonnes de l'extension « DNA derived data » sous leur nom interne (DNA_sequence -> dna_sequence)
 EXT_INTERNAL = {"dna_sequence" if c == "DNA_sequence" else c for c in EXT_COLS}
@@ -96,13 +97,20 @@ if uploaded:
 
     # Le bouton de téléchargement reste affiché après un clic (état conservé)
     if st.session_state.get("zip_data") and st.session_state.get("zip_for") == file_id:
+        pub_meta = st.session_state["pub_meta"]
+        demo = bool("DEMO" in str(pub_meta.title).upper()
+                    or df["occurrenceID"].astype(str).str.upper().str.startswith("DEMO").any()
+                    or ("project_name" in df and df["project_name"].astype(str).str.upper().str.contains("DEMO").any()))
         st.success("Archive générée avec succès !")
         st.download_button("⬇️ Télécharger le fichier ZIP (Darwin Core Archive)",
                            data=st.session_state["zip_data"],
                            file_name="dna_dataset.zip", mime="application/zip")
+        st.download_button(
+            "📦 Télécharger le paquet de livraison (pour le partenaire)",
+            data=build_delivery_package(st.session_state["zip_data"], pub_meta, df,
+                                        [f"{w['type']} : {w['message']}" for w in report["warnings"]], demo),
+            file_name="paquet_livraison_gbif.zip", mime="application/zip",
+            help="Archive + résumé + somme de contrôle + mode d'emploi (anglais) pour l'organisation éditrice.")
 
         # 6. Publication sur GBIF + mise à jour
-        demo = ("DEMO" in str(st.session_state["pub_meta"].title).upper()
-                or df["occurrenceID"].astype(str).str.upper().str.startswith("DEMO").any()
-                or ("project_name" in df and df["project_name"].astype(str).str.upper().str.contains("DEMO").any()))
-        render_publication(st.session_state["pub_meta"], set(df["occurrenceID"].astype(str)), bool(demo))
+        render_publication(pub_meta, set(df["occurrenceID"].astype(str)), demo)
