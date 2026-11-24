@@ -10,6 +10,7 @@ from dna_pipeline.transform import map_to_dwc
 from dna_pipeline.validate import validate_dwc, validate_mixs_terms
 from dna_pipeline.publish import generate_dwca, EXT_COLS
 from dna_pipeline.eml import DatasetMeta, LICENSES, validate_meta
+from dna_pipeline.ui_publication import render_publication
 
 # Colonnes de l'extension « DNA derived data » sous leur nom interne (DNA_sequence -> dna_sequence)
 EXT_INTERNAL = {"dna_sequence" if c == "DNA_sequence" else c for c in EXT_COLS}
@@ -89,6 +90,7 @@ if uploaded:
                         archive_path = generate_dwca(df, tmpdir, meta)
                         st.session_state["zip_data"] = Path(archive_path).read_bytes()
                         st.session_state["zip_for"] = file_id
+                        st.session_state["pub_meta"] = meta
             except Exception as e:
                 st.error(f"Création impossible : {e}")
 
@@ -98,3 +100,9 @@ if uploaded:
         st.download_button("⬇️ Télécharger le fichier ZIP (Darwin Core Archive)",
                            data=st.session_state["zip_data"],
                            file_name="dna_dataset.zip", mime="application/zip")
+
+        # 6. Publication sur GBIF + mise à jour
+        demo = ("DEMO" in str(st.session_state["pub_meta"].title).upper()
+                or df["occurrenceID"].astype(str).str.upper().str.startswith("DEMO").any()
+                or ("project_name" in df and df["project_name"].astype(str).str.upper().str.contains("DEMO").any()))
+        render_publication(st.session_state["pub_meta"], set(df["occurrenceID"].astype(str)), bool(demo))
